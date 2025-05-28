@@ -249,27 +249,40 @@ static bool point_in_circle(int px, int py, int cx, int cy, int r) {
     return dx * dx + dy * dy <= r * r;
 }
 
+// Tooltip rendering function for item info or fallback
 void render_item_tooltip(SDL_Renderer *renderer, TTF_Font *font, int mouse_x, int mouse_y, cJSON *itemData, int imageId) {
     SDL_Color textColor = {255,255,255,255};
-    char name[64] = {0}, type[32] = {0}, desc[128] = {0};
-    int power = 0;
+    char name[128] = {0}, type[64] = {0}, desc[256] = {0};
+    int power = 0, item_id = 0;
+    int fallback = 0;
 
-    cJSON *nameItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_name");
-    cJSON *typeItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_type");
-    cJSON *powerItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_power");
-    cJSON *descItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_description");
+    if (itemData && cJSON_IsObject(itemData)) {
+        cJSON *nameItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_name");
+        cJSON *typeItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_type");
+        cJSON *powerItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_power");
+        cJSON *descItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_description");
+        cJSON *idItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_id");
+        if (nameItem && cJSON_IsString(nameItem)) strncpy(name, nameItem->valuestring, sizeof(name)-1);
+        if (typeItem && cJSON_IsString(typeItem)) strncpy(type, typeItem->valuestring, sizeof(type)-1);
+        if (descItem && cJSON_IsString(descItem)) strncpy(desc, descItem->valuestring, sizeof(desc)-1);
+        if (powerItem && cJSON_IsNumber(powerItem)) power = powerItem->valueint;
+        if (idItem && cJSON_IsNumber(idItem)) item_id = idItem->valueint;
+    } else {
+        fallback = 1;
+    }
 
-    if (nameItem && cJSON_IsString(nameItem)) strncpy(name, nameItem->valuestring, sizeof(name)-1);
-    if (typeItem && cJSON_IsString(typeItem)) strncpy(type, typeItem->valuestring, sizeof(type)-1);
-    if (descItem && cJSON_IsString(descItem)) strncpy(desc, descItem->valuestring, sizeof(desc)-1);
-    if (powerItem && cJSON_IsNumber(powerItem)) power = powerItem->valueint;
-
-    char lines[4][128];
+    char lines[6][128];
     int nlines = 0;
-    snprintf(lines[nlines++], sizeof(lines[0]), "%s", name[0] ? name : "Unknown Item");
-    snprintf(lines[nlines++], sizeof(lines[0]), "Type: %s", type[0] ? type : "Unknown");
-    if (power) snprintf(lines[nlines++], sizeof(lines[0]), "Power: %d", power);
-    if (desc[0]) snprintf(lines[nlines++], sizeof(lines[0]), "%s", desc);
+    if (!fallback) {
+        snprintf(lines[nlines++], sizeof(lines[0]), "%s%s", name[0] ? name : "Unknown Item", (item_id ? "": ""));
+        if (item_id) snprintf(lines[nlines++], sizeof(lines[0]), "Item ID: %d", item_id);
+        snprintf(lines[nlines++], sizeof(lines[0]), "Type: %s", type[0] ? type : "Unknown");
+        if (power) snprintf(lines[nlines++], sizeof(lines[0]), "Power: %d", power);
+        if (desc[0]) snprintf(lines[nlines++], sizeof(lines[0]), "%s", desc);
+    } else {
+        snprintf(lines[nlines++], sizeof(lines[0]), "Image ID: %d", imageId);
+        snprintf(lines[nlines++], sizeof(lines[0]), "No item data");
+    }
 
     int width = 0, height = 0;
     int padding = 8, line_h = 0;
@@ -305,24 +318,6 @@ void render_item_tooltip(SDL_Renderer *renderer, TTF_Font *font, int mouse_x, in
         SDL_DestroyTexture(tex);
     }
 }
-
-typedef struct {
-    const char *slot;
-    int x, y;
-} EquipSlotDisplay;
-
-static const EquipSlotDisplay equipSlots[] = {
-    {"armor",   28,  70},
-    {"helmet", 100,  70},
-    {"amulet", 177,  70},
-    {"ring",    20, 140},
-    {"gloves", 185, 140},
-    {"onhand",  20, 187},
-    {"offhand",185, 190},
-    {"legs",    20, 237},
-    {"boots",  185, 237}
-};
-#define N_EQUIP_SLOTS (sizeof(equipSlots)/sizeof(equipSlots[0]))
 
 int main(int argc, char* argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
@@ -518,7 +513,7 @@ int main(int argc, char* argv[]) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        int hover_bag_slot = -1, hover_equip_slot = -1;
+        int hover_bag_slot = -1;
         cJSON *hover_itemData = NULL;
         int hover_imageId = -1;
 
@@ -624,58 +619,8 @@ int main(int argc, char* argv[]) {
             SDL_SetRenderDrawColor(renderer, 255, 255, 100, 255);
             SDL_RenderFillRect(renderer, &game);
 
-            // Equipment window with items
-            if (showEquipment && equipmentTexture) {
+            if (showEquipment && equipmentTexture)
                 SDL_RenderCopy(renderer, equipmentTexture, NULL, &equipWindow);
-                if (selectedCharIndex >= 0 && charEntries[selectedCharIndex].raw) {
-                    cJSON *equipObj = cJSON_GetObjectItemCaseSensitive(charEntries[selectedCharIndex].raw, "equipment");
-                    for (int i = 0; i < N_EQUIP_SLOTS; ++i) {
-                        const EquipSlotDisplay *slotDef = &equipSlots[i];
-                        cJSON *slotVal = equipObj ? cJSON_GetObjectItemCaseSensitive(equipObj, slotDef->slot) : NULL;
-                        int imageId = -1;
-                        cJSON *itemData = NULL;
-                        if (slotVal && cJSON_IsObject(slotVal)) {
-                            itemData = cJSON_GetObjectItemCaseSensitive(slotVal, "item_data");
-                            if (itemData && cJSON_IsObject(itemData)) {
-                                cJSON *imgVal = cJSON_GetObjectItemCaseSensitive(itemData, "item_image");
-                                if (imgVal && cJSON_IsNumber(imgVal)) {
-                                    imageId = imgVal->valueint;
-                                }
-                            }
-                        } else if (slotVal && cJSON_IsNumber(slotVal)) {
-                            imageId = slotVal->valueint;
-                        }
-                        SDL_Rect iconRect = {equipWindow.x + slotDef->x, equipWindow.y + slotDef->y, 38, 38};
-                        if (imageId > 0) {
-                            char imagePath[256];
-                            snprintf(imagePath, sizeof(imagePath), "images/items/%d.png", imageId);
-                            SDL_Surface *iconSurf = IMG_Load(imagePath);
-                            if (iconSurf) {
-                                SDL_Texture *iconTex = SDL_CreateTextureFromSurface(renderer, iconSurf);
-                                SDL_RenderCopy(renderer, iconTex, NULL, &iconRect);
-                                SDL_DestroyTexture(iconTex);
-                                SDL_FreeSurface(iconSurf);
-                            } else {
-                                SDL_SetRenderDrawColor(renderer, 80, 80, 100, 80);
-                                SDL_RenderFillRect(renderer, &iconRect);
-                            }
-                        } else {
-                            SDL_SetRenderDrawColor(renderer, 40, 40, 60, 60);
-                            SDL_RenderFillRect(renderer, &iconRect);
-                        }
-                        SDL_SetRenderDrawColor(renderer, 120, 120, 180, 170);
-                        SDL_RenderDrawRect(renderer, &iconRect);
-
-                        if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
-                            mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
-                            imageId > 0) {
-                            hover_equip_slot = i;
-                            hover_imageId = imageId;
-                            hover_itemData = itemData;
-                        }
-                    }
-                }
-            }
             if (showSkills && skillsTexture) {
                 SDL_RenderCopy(renderer, skillsTexture, NULL, &skillsWindow);
                 int x = skillsWindow.x + 20;
@@ -857,18 +802,20 @@ int main(int argc, char* argv[]) {
                             SDL_SetRenderDrawColor(renderer, 100, 100, 150, 120);
                             SDL_RenderDrawRect(renderer, &iconRect);
 
+                            // Hover logic: always set hover if on icon with valid imageId
                             if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
                                 mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
-                                imageId > 0 && itemData) {
+                                imageId > 0) {
                                 hover_bag_slot = slot;
-                                hover_itemData = itemData;
                                 hover_imageId = imageId;
+                                hover_itemData = itemData; // may be NULL
                             }
                         }
                     }
                 }
             }
-            if (hover_itemData) {
+            // Tooltip always shown for any hovered item icon
+            if (hover_imageId > 0) {
                 render_item_tooltip(renderer, font, mouse_x, mouse_y, hover_itemData, hover_imageId);
             }
             if (showSpells) {
