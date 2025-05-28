@@ -249,6 +249,81 @@ static bool point_in_circle(int px, int py, int cx, int cy, int r) {
     return dx * dx + dy * dy <= r * r;
 }
 
+void render_item_tooltip(SDL_Renderer *renderer, TTF_Font *font, int mouse_x, int mouse_y, cJSON *itemData, int imageId) {
+    SDL_Color textColor = {255,255,255,255};
+    char name[64] = {0}, type[32] = {0}, desc[128] = {0};
+    int power = 0;
+
+    cJSON *nameItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_name");
+    cJSON *typeItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_type");
+    cJSON *powerItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_power");
+    cJSON *descItem = cJSON_GetObjectItemCaseSensitive(itemData, "item_description");
+
+    if (nameItem && cJSON_IsString(nameItem)) strncpy(name, nameItem->valuestring, sizeof(name)-1);
+    if (typeItem && cJSON_IsString(typeItem)) strncpy(type, typeItem->valuestring, sizeof(type)-1);
+    if (descItem && cJSON_IsString(descItem)) strncpy(desc, descItem->valuestring, sizeof(desc)-1);
+    if (powerItem && cJSON_IsNumber(powerItem)) power = powerItem->valueint;
+
+    char lines[4][128];
+    int nlines = 0;
+    snprintf(lines[nlines++], sizeof(lines[0]), "%s", name[0] ? name : "Unknown Item");
+    snprintf(lines[nlines++], sizeof(lines[0]), "Type: %s", type[0] ? type : "Unknown");
+    if (power) snprintf(lines[nlines++], sizeof(lines[0]), "Power: %d", power);
+    if (desc[0]) snprintf(lines[nlines++], sizeof(lines[0]), "%s", desc);
+
+    int width = 0, height = 0;
+    int padding = 8, line_h = 0;
+    for (int i=0; i<nlines; ++i) {
+        int w=0, h=0;
+        TTF_SizeText(font, lines[i], &w, &h);
+        if (w > width) width = w;
+        if (h > line_h) line_h = h;
+    }
+    width += padding * 2;
+    height = line_h * nlines + padding * 2;
+
+    int box_x = mouse_x + 20;
+    int box_y = mouse_y + 10;
+    if (box_x + width > WINDOW_WIDTH) box_x = WINDOW_WIDTH - width - 4;
+    if (box_y + height > WINDOW_HEIGHT) box_y = WINDOW_HEIGHT - height - 4;
+
+    SDL_Rect box = {box_x, box_y, width, height};
+    SDL_SetRenderDrawColor(renderer, 32,32,56,220);
+    SDL_RenderFillRect(renderer, &box);
+    SDL_SetRenderDrawColor(renderer, 160,160,240,255);
+    SDL_RenderDrawRect(renderer, &box);
+
+    int tx = box_x + padding;
+    int ty = box_y + padding;
+    for (int i=0; i<nlines; ++i) {
+        SDL_Surface *surf = TTF_RenderText_Solid(font, lines[i], textColor);
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+        SDL_Rect dst = {tx, ty, surf->w, surf->h};
+        SDL_RenderCopy(renderer, tex, NULL, &dst);
+        ty += surf->h;
+        SDL_FreeSurface(surf);
+        SDL_DestroyTexture(tex);
+    }
+}
+
+typedef struct {
+    const char *slot;
+    int x, y;
+} EquipSlotDisplay;
+
+static const EquipSlotDisplay equipSlots[] = {
+    {"armor",   28,  70},
+    {"helmet", 100,  70},
+    {"amulet", 177,  70},
+    {"ring",    20, 140},
+    {"gloves", 185, 140},
+    {"onhand",  20, 187},
+    {"offhand",185, 190},
+    {"legs",    20, 237},
+    {"boots",  185, 237}
+};
+#define N_EQUIP_SLOTS (sizeof(equipSlots)/sizeof(equipSlots[0]))
+
 int main(int argc, char* argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
     IMG_Init(IMG_INIT_PNG);
@@ -349,8 +424,12 @@ int main(int argc, char* argv[]) {
     float fps = 0.0f;
     Uint32 fpsLast = SDL_GetTicks();
 
+    int mouse_x = 0, mouse_y = 0;
+
     while (!quit) {
         frameStart = SDL_GetTicks();
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) quit = true;
             if (e.type == SDL_KEYDOWN && currentScreen == TITLE_SCREEN) {
@@ -438,6 +517,10 @@ int main(int argc, char* argv[]) {
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+
+        int hover_bag_slot = -1, hover_equip_slot = -1;
+        cJSON *hover_itemData = NULL;
+        int hover_imageId = -1;
 
         if (currentScreen == TITLE_SCREEN) {
             if (bgTexture)
@@ -541,8 +624,58 @@ int main(int argc, char* argv[]) {
             SDL_SetRenderDrawColor(renderer, 255, 255, 100, 255);
             SDL_RenderFillRect(renderer, &game);
 
-            if (showEquipment && equipmentTexture)
+            // Equipment window with items
+            if (showEquipment && equipmentTexture) {
                 SDL_RenderCopy(renderer, equipmentTexture, NULL, &equipWindow);
+                if (selectedCharIndex >= 0 && charEntries[selectedCharIndex].raw) {
+                    cJSON *equipObj = cJSON_GetObjectItemCaseSensitive(charEntries[selectedCharIndex].raw, "equipment");
+                    for (int i = 0; i < N_EQUIP_SLOTS; ++i) {
+                        const EquipSlotDisplay *slotDef = &equipSlots[i];
+                        cJSON *slotVal = equipObj ? cJSON_GetObjectItemCaseSensitive(equipObj, slotDef->slot) : NULL;
+                        int imageId = -1;
+                        cJSON *itemData = NULL;
+                        if (slotVal && cJSON_IsObject(slotVal)) {
+                            itemData = cJSON_GetObjectItemCaseSensitive(slotVal, "item_data");
+                            if (itemData && cJSON_IsObject(itemData)) {
+                                cJSON *imgVal = cJSON_GetObjectItemCaseSensitive(itemData, "item_image");
+                                if (imgVal && cJSON_IsNumber(imgVal)) {
+                                    imageId = imgVal->valueint;
+                                }
+                            }
+                        } else if (slotVal && cJSON_IsNumber(slotVal)) {
+                            imageId = slotVal->valueint;
+                        }
+                        SDL_Rect iconRect = {equipWindow.x + slotDef->x, equipWindow.y + slotDef->y, 38, 38};
+                        if (imageId > 0) {
+                            char imagePath[256];
+                            snprintf(imagePath, sizeof(imagePath), "images/items/%d.png", imageId);
+                            SDL_Surface *iconSurf = IMG_Load(imagePath);
+                            if (iconSurf) {
+                                SDL_Texture *iconTex = SDL_CreateTextureFromSurface(renderer, iconSurf);
+                                SDL_RenderCopy(renderer, iconTex, NULL, &iconRect);
+                                SDL_DestroyTexture(iconTex);
+                                SDL_FreeSurface(iconSurf);
+                            } else {
+                                SDL_SetRenderDrawColor(renderer, 80, 80, 100, 80);
+                                SDL_RenderFillRect(renderer, &iconRect);
+                            }
+                        } else {
+                            SDL_SetRenderDrawColor(renderer, 40, 40, 60, 60);
+                            SDL_RenderFillRect(renderer, &iconRect);
+                        }
+                        SDL_SetRenderDrawColor(renderer, 120, 120, 180, 170);
+                        SDL_RenderDrawRect(renderer, &iconRect);
+
+                        if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
+                            mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
+                            imageId > 0) {
+                            hover_equip_slot = i;
+                            hover_imageId = imageId;
+                            hover_itemData = itemData;
+                        }
+                    }
+                }
+            }
             if (showSkills && skillsTexture) {
                 SDL_RenderCopy(renderer, skillsTexture, NULL, &skillsWindow);
                 int x = skillsWindow.x + 20;
@@ -670,8 +803,74 @@ int main(int argc, char* argv[]) {
                     skill_y += 16;
                 }
             }
-            if (showBag && bagTexture)
+            if (showBag && bagTexture) {
                 SDL_RenderCopy(renderer, bagTexture, NULL, &bagWindow);
+                if (selectedCharIndex >= 0 && charEntries[selectedCharIndex].raw) {
+                    cJSON *bagObj = cJSON_GetObjectItemCaseSensitive(charEntries[selectedCharIndex].raw, "bag");
+                    if (bagObj) {
+                        int iconSize = 40;
+                        int pad = 4;
+                        int startX = bagWindow.x + 50;
+                        int startY = bagWindow.y + 50;
+                        int maxCols = 7;
+                        char slotname[16];
+                        for (int slot = 0; slot < 49; slot++) {
+                            snprintf(slotname, sizeof(slotname), "bag%d", slot);
+                            cJSON *slotVal = cJSON_GetObjectItemCaseSensitive(bagObj, slotname);
+                            int iconCol = slot % maxCols;
+                            int iconRow = slot / maxCols;
+                            SDL_Rect iconRect = {
+                                startX + iconCol * (iconSize + pad),
+                                startY + iconRow * (iconSize + pad),
+                                iconSize, iconSize
+                            };
+                            int imageId = -1;
+                            cJSON *itemData = NULL;
+                            if (slotVal && cJSON_IsObject(slotVal)) {
+                                itemData = cJSON_GetObjectItemCaseSensitive(slotVal, "item_data");
+                                if (itemData && cJSON_IsObject(itemData)) {
+                                    cJSON *imgVal = cJSON_GetObjectItemCaseSensitive(itemData, "item_image");
+                                    if (imgVal && cJSON_IsNumber(imgVal)) {
+                                        imageId = imgVal->valueint;
+                                    }
+                                }
+                            } else if (slotVal && cJSON_IsNumber(slotVal)) {
+                                imageId = slotVal->valueint;
+                            }
+                            if (imageId > 0) {
+                                char imagePath[256];
+                                snprintf(imagePath, sizeof(imagePath), "images/items/%d.png", imageId);
+                                SDL_Surface *iconSurf = IMG_Load(imagePath);
+                                if (iconSurf) {
+                                    SDL_Texture *iconTex = SDL_CreateTextureFromSurface(renderer, iconSurf);
+                                    SDL_RenderCopy(renderer, iconTex, NULL, &iconRect);
+                                    SDL_DestroyTexture(iconTex);
+                                    SDL_FreeSurface(iconSurf);
+                                } else {
+                                    SDL_SetRenderDrawColor(renderer, 80, 80, 100, 80);
+                                    SDL_RenderFillRect(renderer, &iconRect);
+                                }
+                            } else {
+                                SDL_SetRenderDrawColor(renderer, 40, 40, 60, 60);
+                                SDL_RenderFillRect(renderer, &iconRect);
+                            }
+                            SDL_SetRenderDrawColor(renderer, 100, 100, 150, 120);
+                            SDL_RenderDrawRect(renderer, &iconRect);
+
+                            if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
+                                mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
+                                imageId > 0 && itemData) {
+                                hover_bag_slot = slot;
+                                hover_itemData = itemData;
+                                hover_imageId = imageId;
+                            }
+                        }
+                    }
+                }
+            }
+            if (hover_itemData) {
+                render_item_tooltip(renderer, font, mouse_x, mouse_y, hover_itemData, hover_imageId);
+            }
             if (showSpells) {
                 SDL_SetRenderDrawColor(renderer, 40, 20, 60, 230);
                 SDL_RenderFillRect(renderer, &spellsWindow);
