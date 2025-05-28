@@ -34,7 +34,7 @@ int main() {
     listen(server_fd, 5);
 
     MYSQL *conn = mysql_init(NULL);
-    if (!mysql_real_connect(conn, "host", "user", "pass", "db", 0, NULL, 0)) {
+    if (!mysql_real_connect(conn, "localhost", "digitalshadows", "digitalshadows", "digitalshadows", 0, NULL, 0)) {
         fprintf(stderr, "mysql error: %s\n", mysql_error(conn));
         exit(1);
     }
@@ -221,4 +221,3 @@ int main() {
     close(server_fd);
     return 0;
 }
-
