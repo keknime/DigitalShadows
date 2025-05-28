@@ -249,7 +249,6 @@ static bool point_in_circle(int px, int py, int cx, int cy, int r) {
     return dx * dx + dy * dy <= r * r;
 }
 
-// Tooltip rendering function for item info or fallback
 void render_item_tooltip(SDL_Renderer *renderer, TTF_Font *font, int mouse_x, int mouse_y, cJSON *itemData, int imageId) {
     SDL_Color textColor = {255,255,255,255};
     char name[128] = {0}, type[64] = {0}, desc[256] = {0};
@@ -517,6 +516,28 @@ int main(int argc, char* argv[]) {
         cJSON *hover_itemData = NULL;
         int hover_imageId = -1;
 
+        // --- Equipment hover logic
+        int hover_equipment_slot = -1;
+        cJSON *hover_equipmentData = NULL;
+        int hover_equipmentImageId = -1;
+
+        // Equipment slot positions
+        struct EquipmentSlot {
+            const char *key;
+            int x, y;
+        } equipmentSlots[] = {
+            {"armor", 28, 70},
+            {"helmet", 100, 70},
+            {"amulet", 177, 70},
+            {"ring", 20, 140},
+            {"gloves", 185, 140},
+            {"onhand", 20, 187},
+            {"offhand", 185, 190},
+            {"legs", 20, 237},
+            {"boots", 185, 237}
+        };
+        int equipmentSlotCount = sizeof(equipmentSlots)/sizeof(equipmentSlots[0]);
+
         if (currentScreen == TITLE_SCREEN) {
             if (bgTexture)
                 SDL_RenderCopy(renderer, bgTexture, NULL, NULL);
@@ -619,8 +640,69 @@ int main(int argc, char* argv[]) {
             SDL_SetRenderDrawColor(renderer, 255, 255, 100, 255);
             SDL_RenderFillRect(renderer, &game);
 
-            if (showEquipment && equipmentTexture)
+            if (showEquipment && equipmentTexture) {
                 SDL_RenderCopy(renderer, equipmentTexture, NULL, &equipWindow);
+
+                // Render equipment icons and handle hover
+                if (selectedCharIndex >= 0 && charEntries[selectedCharIndex].raw) {
+                    cJSON *equipObj = cJSON_GetObjectItemCaseSensitive(charEntries[selectedCharIndex].raw, "equipment");
+                    if (equipObj) {
+                        int iconSize = 38;
+                        for (int i = 0; i < equipmentSlotCount; i++) {
+                            const char *slotKey = equipmentSlots[i].key;
+                            int posX = equipWindow.x + equipmentSlots[i].x;
+                            int posY = equipWindow.y + equipmentSlots[i].y;
+                            SDL_Rect iconRect = {posX, posY, iconSize, iconSize};
+
+                            cJSON *slotVal = cJSON_GetObjectItemCaseSensitive(equipObj, slotKey);
+                            int imageId = -1;
+                            cJSON *itemData = NULL;
+                            if (slotVal && cJSON_IsObject(slotVal)) {
+                                itemData = cJSON_GetObjectItemCaseSensitive(slotVal, "item_data");
+                                if (itemData && cJSON_IsObject(itemData)) {
+                                    cJSON *imgVal = cJSON_GetObjectItemCaseSensitive(itemData, "item_image");
+                                    if (imgVal && cJSON_IsNumber(imgVal)) {
+                                        imageId = imgVal->valueint;
+                                    }
+                                }
+                            } else if (slotVal && cJSON_IsNumber(slotVal)) {
+                                imageId = slotVal->valueint;
+                            }
+
+                            // Icon render
+                            if (imageId > 0) {
+                                char imagePath[256];
+                                snprintf(imagePath, sizeof(imagePath), "images/items/%d.png", imageId);
+                                SDL_Surface *iconSurf = IMG_Load(imagePath);
+                                if (iconSurf) {
+                                    SDL_Texture *iconTex = SDL_CreateTextureFromSurface(renderer, iconSurf);
+                                    SDL_RenderCopy(renderer, iconTex, NULL, &iconRect);
+                                    SDL_DestroyTexture(iconTex);
+                                    SDL_FreeSurface(iconSurf);
+                                } else {
+                                    SDL_SetRenderDrawColor(renderer, 80, 80, 100, 80);
+                                    SDL_RenderFillRect(renderer, &iconRect);
+                                }
+                            } else {
+                                SDL_SetRenderDrawColor(renderer, 40, 40, 60, 60);
+                                SDL_RenderFillRect(renderer, &iconRect);
+                            }
+                            SDL_SetRenderDrawColor(renderer, 160, 200, 255, 130);
+                            SDL_RenderDrawRect(renderer, &iconRect);
+
+                            // Equipment hover
+                            if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
+                                mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
+                                imageId > 0) {
+                                hover_equipment_slot = i;
+                                hover_equipmentImageId = imageId;
+                                hover_equipmentData = itemData;
+                            }
+                        }
+                    }
+                }
+            }
+
             if (showSkills && skillsTexture) {
                 SDL_RenderCopy(renderer, skillsTexture, NULL, &skillsWindow);
                 int x = skillsWindow.x + 20;
@@ -802,22 +884,27 @@ int main(int argc, char* argv[]) {
                             SDL_SetRenderDrawColor(renderer, 100, 100, 150, 120);
                             SDL_RenderDrawRect(renderer, &iconRect);
 
-                            // Hover logic: always set hover if on icon with valid imageId
                             if (mouse_x >= iconRect.x && mouse_x <= iconRect.x + iconRect.w &&
                                 mouse_y >= iconRect.y && mouse_y <= iconRect.y + iconRect.h &&
                                 imageId > 0) {
                                 hover_bag_slot = slot;
                                 hover_imageId = imageId;
-                                hover_itemData = itemData; // may be NULL
+                                hover_itemData = itemData;
                             }
                         }
                     }
                 }
             }
-            // Tooltip always shown for any hovered item icon
+
+            // Equipment window: tooltip for hovered slot
+            if (showEquipment && hover_equipmentImageId > 0) {
+                render_item_tooltip(renderer, font, mouse_x, mouse_y, hover_equipmentData, hover_equipmentImageId);
+            }
+            // Bag window: tooltip for hovered slot
             if (hover_imageId > 0) {
                 render_item_tooltip(renderer, font, mouse_x, mouse_y, hover_itemData, hover_imageId);
             }
+
             if (showSpells) {
                 SDL_SetRenderDrawColor(renderer, 40, 20, 60, 230);
                 SDL_RenderFillRect(renderer, &spellsWindow);
